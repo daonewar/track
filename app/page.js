@@ -4,14 +4,9 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 
 const GUN_SHOT_URL = '/start.mp3'
 
-/**
- * Mock WebSocket-like backend for race timing tracking
- * This implementation uses in-memory state management
- * For production, replace with real WebSocket server or API routes
- */
-
-// Simulate a room state store (in production, this would be a real backend)
+// Global room store shared across all clients (simulating backend)
 const roomStore = new Map()
+const roomSubscribers = new Map() // Track listeners for each room
 
 export default function Home() {
   const [socket, setSocket] = useState(null)
@@ -23,20 +18,15 @@ export default function Home() {
   const [displayTime, setDisplayTime] = useState(0)
   const [activeModal, setActiveModal] = useState(null)
   const [currentStatus, setCurrentStatus] = useState('READY')
-  const [connectionStatus, setConnectionStatus] = useState('Connecting...')
+  const [connectionStatus, setConnectionStatus] = useState('Connected')
   const gunAudio = useRef(null)
 
-  // Initialize mock socket
+  // Initialize mock socket on mount
   useEffect(() => {
     console.log('[v0] Initializing app connection')
     
-    // Create a mock socket object
     const mockSocket = {
       id: 'mock-' + Math.random().toString(36).substr(2, 9),
-      on: function(event, callback) {
-        console.log('[v0] Socket.on:', event)
-        this['_' + event] = callback
-      },
       emit: function(event, ...args) {
         console.log('[v0] Socket.emit:', event, args)
         handleSocketEmit(event, args)
@@ -55,49 +45,7 @@ export default function Home() {
     }
   }, [])
 
-  const handleSocketEmit = useCallback((event, args) => {
-    const [payload, callback] = args.length === 2 ? args : [args[0], null]
-    
-    if (event === 'create-room') {
-      const code = payload
-      const newRoomCode = Math.random().toString(36).substr(2, 6).toUpperCase()
-      const newRoom = {
-        code: newRoomCode,
-        accessCode: code,
-        status: 'IDLE',
-        startTime: null,
-        endTime: null,
-        pauseTime: null,
-        splits: [],
-        eventName: '',
-        heatNumber: '',
-        releaseSplits: false
-      }
-      roomStore.set(newRoomCode, newRoom)
-      console.log('[v0] Room created:', newRoomCode)
-      if (callback) callback({ success: true, roomCode: newRoomCode, state: newRoom })
-    } 
-    else if (event === 'join-room') {
-      const code = payload
-      const room = roomStore.get(code)
-      if (room) {
-        console.log('[v0] Room joined:', code)
-        if (callback) callback({ success: true, state: room })
-      } else {
-        console.log('[v0] Room not found:', code)
-        if (callback) callback({ success: false, message: 'Room not found' })
-      }
-    }
-    else if (event === 'timer-action') {
-      const { roomCode, action, payload: actionPayload } = payload
-      const room = roomStore.get(roomCode)
-      if (room) {
-        handleTimerAction(room, action, actionPayload)
-      }
-    }
-  }, [])
-
-  const handleTimerAction = (room, action, payload) => {
+  const handleTimerAction = useCallback((room, action, payload) => {
     const now = Date.now()
     
     switch(action) {
@@ -147,9 +95,62 @@ export default function Home() {
         console.log('[v0] UPDATE_METADATA:', payload)
         break
     }
+  }, [])
+
+  const broadcastRoomUpdate = useCallback((roomCode, room) => {
+    console.log('[v0] Broadcasting room update for', roomCode)
+    if (roomSubscribers.has(roomCode)) {
+      const subscribers = roomSubscribers.get(roomCode)
+      subscribers.forEach(callback => callback(room))
+    }
+  }, [])
+
+  const handleSocketEmit = useCallback((event, args) => {
+    const [payload, callback] = args.length === 2 ? args : [args[0], null]
     
-    setRoomState({...room})
-  }
+    if (event === 'create-room') {
+      const code = payload
+      const newRoomCode = Math.random().toString(36).substr(2, 6).toUpperCase()
+      const newRoom = {
+        code: newRoomCode,
+        accessCode: code,
+        status: 'IDLE',
+        startTime: null,
+        endTime: null,
+        pauseTime: null,
+        splits: [],
+        eventName: '',
+        heatNumber: '',
+        releaseSplits: false
+      }
+      roomStore.set(newRoomCode, newRoom)
+      roomSubscribers.set(newRoomCode, new Set())
+      console.log('[v0] Room created:', newRoomCode)
+      if (callback) callback({ success: true, roomCode: newRoomCode, state: newRoom })
+    } 
+    else if (event === 'join-room') {
+      const code = payload
+      const room = roomStore.get(code)
+      if (room) {
+        console.log('[v0] Room joined:', code)
+        if (!roomSubscribers.has(code)) {
+          roomSubscribers.set(code, new Set())
+        }
+        if (callback) callback({ success: true, state: room })
+      } else {
+        console.log('[v0] Room not found:', code)
+        if (callback) callback({ success: false, message: 'Room not found' })
+      }
+    }
+    else if (event === 'timer-action') {
+      const { roomCode, action, payload: actionPayload } = payload
+      const room = roomStore.get(roomCode)
+      if (room) {
+        handleTimerAction(room, action, actionPayload)
+        broadcastRoomUpdate(roomCode, room)
+      }
+    }
+  }, [handleTimerAction, broadcastRoomUpdate])
 
   useEffect(() => {
     gunAudio.current = new Audio(GUN_SHOT_URL)
@@ -172,18 +173,24 @@ export default function Home() {
   }, [roomState])
 
   useEffect(() => {
-    if (!socket) return
+    if (!roomCode || !roomState) return
 
-    socket.on('room-update', ({ action, room }) => {
-      setRoomState(room)
-      updateStatusLabel(action, room.status)
-      handleSideEffects(action)
-    })
+    const handleRoomUpdate = (updatedRoom) => {
+      console.log('[v0] Room update received:', updatedRoom.status)
+      setRoomState({...updatedRoom})
+    }
+
+    if (!roomSubscribers.has(roomCode)) {
+      roomSubscribers.set(roomCode, new Set())
+    }
+
+    const subscribers = roomSubscribers.get(roomCode)
+    subscribers.add(handleRoomUpdate)
 
     return () => {
-      socket.off('room-update')
+      subscribers.delete(handleRoomUpdate)
     }
-  }, [socket])
+  }, [roomCode])
 
   const updateStatusLabel = (action, status) => {
     if (action === 'MARKS') setCurrentStatus('ON YOUR MARKS')
