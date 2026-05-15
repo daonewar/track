@@ -1,120 +1,140 @@
-import React, { useState, useEffect, useRef } from 'react';
-import io from 'socket.io-client';
+'use client'
 
-const socket = io(process.env.REACT_APP_BACKEND_URL || 'http://localhost:3001');
-const GUN_SHOT_URL = '/start.mp3';
+import { useState, useEffect, useRef } from 'react'
+import io from 'socket.io-client'
 
-function App() {
-  const [view, setView] = useState('landing');
-  const [roomCode, setRoomCode] = useState('');
-  const [inputCode, setInputCode] = useState('');
-  const [accessCode, setAccessCode] = useState('');
-  const [roomState, setRoomState] = useState(null);
-  const [displayTime, setDisplayTime] = useState(0);
-  const [activeModal, setActiveModal] = useState(null);
-  
-  const [currentStatus, setCurrentStatus] = useState('READY');
-  const gunAudio = useRef(null);
+const GUN_SHOT_URL = '/start.mp3'
+
+export default function Home() {
+  const [socket, setSocket] = useState(null)
+  const [view, setView] = useState('landing')
+  const [roomCode, setRoomCode] = useState('')
+  const [inputCode, setInputCode] = useState('')
+  const [accessCode, setAccessCode] = useState('')
+  const [roomState, setRoomState] = useState(null)
+  const [displayTime, setDisplayTime] = useState(0)
+  const [activeModal, setActiveModal] = useState(null)
+  const [currentStatus, setCurrentStatus] = useState('READY')
+  const gunAudio = useRef(null)
 
   useEffect(() => {
-    gunAudio.current = new Audio(GUN_SHOT_URL);
-    gunAudio.current.preload = 'auto';
-    gunAudio.current.load(); // Warm up the audio buffer immediately
+    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'https://trackthing.onrender.com'
+    const newSocket = io(backendUrl)
+    setSocket(newSocket)
 
-    let interval;
+    return () => {
+      newSocket.disconnect()
+    }
+  }, [])
+
+  useEffect(() => {
+    gunAudio.current = new Audio(GUN_SHOT_URL)
+    gunAudio.current.preload = 'auto'
+    gunAudio.current.load()
+
+    let interval
     if (roomState?.status === 'RUNNING') {
       interval = setInterval(() => {
-        setDisplayTime(Date.now() - roomState.startTime);
-      }, 10);
+        setDisplayTime(Date.now() - roomState.startTime)
+      }, 10)
     } else if (roomState?.status === 'IDLE') {
-      setDisplayTime(0);
+      setDisplayTime(0)
     } else if (roomState?.status === 'STOPPED') {
-      setDisplayTime(roomState.endTime - roomState.startTime);
+      setDisplayTime(roomState.endTime - roomState.startTime)
     } else if (roomState?.status === 'PAUSED') {
-      setDisplayTime(roomState.pauseTime - roomState.startTime);
+      setDisplayTime(roomState.pauseTime - roomState.startTime)
     }
-    return () => clearInterval(interval);
-  }, [roomState]);
+    return () => clearInterval(interval)
+  }, [roomState])
 
   useEffect(() => {
+    if (!socket) return
+
     socket.on('room-update', ({ action, room }) => {
-      setRoomState(room);
-      updateStatusLabel(action, room.status);
-      handleSideEffects(action);
-    });
-    return () => socket.off('room-update');
-  }, []);
+      setRoomState(room)
+      updateStatusLabel(action, room.status)
+      handleSideEffects(action)
+    })
+
+    return () => {
+      socket.off('room-update')
+    }
+  }, [socket])
 
   const updateStatusLabel = (action, status) => {
-    if (action === 'MARKS') setCurrentStatus('ON YOUR MARKS');
-    else if (action === 'SET') setCurrentStatus('SET');
-    else if (action === 'START') setCurrentStatus('RUNNING');
-    else if (action === 'FALSE_START') setCurrentStatus('FALSE START');
-    else if (action === 'CONCLUDE') setCurrentStatus('CONCLUDED');
-    else if (action === 'RESET') setCurrentStatus('READY');
-    else if (status === 'IDLE') setCurrentStatus('READY');
-  };
+    if (action === 'MARKS') setCurrentStatus('ON YOUR MARKS')
+    else if (action === 'SET') setCurrentStatus('SET')
+    else if (action === 'START') setCurrentStatus('RUNNING')
+    else if (action === 'FALSE_START') setCurrentStatus('FALSE START')
+    else if (action === 'CONCLUDE') setCurrentStatus('CONCLUDED')
+    else if (action === 'RESET') setCurrentStatus('READY')
+    else if (status === 'IDLE') setCurrentStatus('READY')
+  }
 
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen();
+      document.documentElement.requestFullscreen()
     } else if (document.exitFullscreen) {
-      document.exitFullscreen();
+      document.exitFullscreen()
     }
-  };
+  }
 
   const handleSideEffects = (action) => {
-    const synth = window.speechSynthesis;
-    if (action === 'MARKS') synth.speak(new SpeechSynthesisUtterance("Runners, on your marks"));
-    else if (action === 'SET') synth.speak(new SpeechSynthesisUtterance("Set"));
+    const synth = window.speechSynthesis
+    if (action === 'MARKS') synth.speak(new SpeechSynthesisUtterance('Runners, on your marks'))
+    else if (action === 'SET') synth.speak(new SpeechSynthesisUtterance('Set'))
     else if (action === 'START' || action === 'FALSE_START') {
-      gunAudio.current.currentTime = 0;
-      gunAudio.current.play();
+      if (gunAudio.current) {
+        gunAudio.current.currentTime = 0
+        gunAudio.current.play()
+      }
     }
-  };
+  }
 
   const createRoom = () => {
+    if (!socket) return
     socket.emit('create-room', accessCode, (res) => {
       if (res.success) {
-        setRoomCode(res.roomCode);
-        setRoomState(res.state);
-        setView('host');
-        setActiveModal(null);
+        setRoomCode(res.roomCode)
+        setRoomState(res.state)
+        setView('host')
+        setActiveModal(null)
       } else {
-        alert(res.message);
+        alert(res.message)
       }
-    });
-  };
+    })
+  }
 
   const joinRoom = () => {
+    if (!socket) return
     socket.emit('join-room', inputCode.toUpperCase(), (res) => {
       if (res.success) {
-        setRoomCode(inputCode.toUpperCase());
-        setRoomState(res.state);
-        setView('viewer');
-        setActiveModal(null);
+        setRoomCode(inputCode.toUpperCase())
+        setRoomState(res.state)
+        setView('viewer')
+        setActiveModal(null)
       } else {
-        alert(res.message);
+        alert(res.message)
       }
-    });
-  };
+    })
+  }
 
   const sendAction = (action, payload = null) => {
-    socket.emit('timer-action', { roomCode, action, payload });
-  };
+    if (!socket) return
+    socket.emit('timer-action', { roomCode, action, payload })
+  }
 
   const formatTime = (ms) => {
-    const absMs = Math.max(0, ms);
-    const mm = Math.floor(absMs / 60000);
-    const ss = Math.floor((absMs % 60000) / 1000);
-    const msms = Math.floor((absMs % 1000) / 10);
-    return `${mm.toString().padStart(2, '0')}:${ss.toString().padStart(2, '0')}.${msms.toString().padStart(2, '0')}`;
-  };
+    const absMs = Math.max(0, ms)
+    const mm = Math.floor(absMs / 60000)
+    const ss = Math.floor((absMs % 60000) / 1000)
+    const msms = Math.floor((absMs % 1000) / 10)
+    return `${mm.toString().padStart(2, '0')}:${ss.toString().padStart(2, '0')}.${msms.toString().padStart(2, '0')}`
+  }
 
   if (view === 'landing') {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-black text-white font-sans p-6 overflow-hidden">
-        {/* Background Decorative Element */}
         <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-orange-600 to-transparent shadow-[0_0_20px_#ea580c]"></div>
         
         <h1 className="text-7xl md:text-9xl font-black mb-16 tracking-tighter">
@@ -137,7 +157,6 @@ function App() {
           </button>
         </div>
 
-        {/* Modal Overlay */}
         {activeModal && (
           <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
             <div className="bg-zinc-900 w-full max-w-md p-10 rounded-3xl border-2 border-zinc-800 shadow-[0_20px_50px_rgba(0,0,0,0.5)]">
@@ -166,20 +185,18 @@ function App() {
             </div>
           </div>
         )}
-
       </div>
-    );
+    )
   }
 
   return (
     <div className="min-h-screen bg-black text-white font-mono p-4 md:p-8 flex flex-col items-center overflow-x-hidden">
-      {/* Status Bar */}
       {view === 'host' && (
         <header className="w-full max-w-7xl flex flex-col md:flex-row justify-between items-center gap-4 mb-8 border-b-2 border-zinc-900 pb-6">
-        <div className="flex items-center gap-4">
-          <h2 className="text-2xl font-black tracking-tighter">ID: <span className="text-orange-500 select-all">{roomCode}</span></h2>
-        </div>
-        <div className="flex gap-2 flex-1 max-w-2xl w-full">
+          <div className="flex items-center gap-4">
+            <h2 className="text-2xl font-black tracking-tighter">ID: <span className="text-orange-500 select-all">{roomCode}</span></h2>
+          </div>
+          <div className="flex gap-2 flex-1 max-w-2xl w-full">
             <input 
               className="bg-zinc-900 border border-zinc-800 p-2 rounded-lg flex-1 focus:border-orange-600 outline-none text-sm"
               placeholder="Event Name"
@@ -192,20 +209,19 @@ function App() {
               value={roomState?.heatNumber || ''}
               onChange={(e) => sendAction('UPDATE_METADATA', { eventName: roomState?.eventName, heatNumber: e.target.value })}
             />
-        </div>
-        <div className="bg-white text-black px-4 py-1 rounded font-black text-sm uppercase tracking-tighter">{view}</div>
+          </div>
+          <div className="bg-white text-black px-4 py-1 rounded font-black text-sm uppercase tracking-tighter">{view}</div>
         </header>
       )}
       
-      {/* Main Clock */}
       <div className={`relative group flex flex-col items-center w-full ${view === 'viewer' ? 'flex-1 justify-center' : ''}`}>
         {view === 'viewer' && roomState?.eventName && (
-            <div className="text-center mb-6">
-                <h1 className="text-4xl md:text-6xl font-black uppercase tracking-tighter text-white drop-shadow-[0_0_10px_rgba(255,255,255,0.2)]">{roomState.eventName}</h1>
-                {roomState.heatNumber && (
-                    <p className="text-orange-500 font-bold uppercase tracking-[0.4em] mt-2">Heat {roomState.heatNumber}</p>
-                )}
-            </div>
+          <div className="text-center mb-6">
+            <h1 className="text-4xl md:text-6xl font-black uppercase tracking-tighter text-white drop-shadow-[0_0_10px_rgba(255,255,255,0.2)]">{roomState.eventName}</h1>
+            {roomState.heatNumber && (
+              <p className="text-orange-500 font-bold uppercase tracking-[0.4em] mt-2">Heat {roomState.heatNumber}</p>
+            )}
+          </div>
         )}
 
         {(!roomState?.releaseSplits || view === 'host') ? (
@@ -231,7 +247,6 @@ function App() {
         )}
       </div>
 
-      {/* Host Control Deck */}
       {view === 'host' && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 w-full max-w-6xl mb-16 relative z-10">
           <button className="bg-zinc-900 border-2 border-zinc-800 hover:bg-zinc-800 hover:scale-105 p-5 rounded-2xl font-black uppercase text-lg transition-all active:scale-90" onClick={() => sendAction('MARKS')}>Marks</button>
@@ -262,28 +277,26 @@ function App() {
         </button>
       )}
 
-      {/* High-Contrast Splits Table */}
       {view === 'host' && (
         <div className="w-full max-w-4xl bg-zinc-900/30 rounded-3xl border-2 border-zinc-900 p-8 backdrop-blur-sm">
-        <div className="flex justify-between items-end mb-8 border-b-2 border-zinc-800 pb-4">
-          <h3 className="text-orange-500 font-black text-2xl uppercase tracking-tighter">Splits</h3>
-          <span className="text-zinc-600 text-xs font-bold tracking-[0.5em] uppercase">{roomState?.splits.length || 0} Records Found</span>
-        </div>
-        <div className="space-y-4 max-h-[400px] overflow-y-auto pr-4 custom-scrollbar">
-          {roomState?.splits.map((time, i) => (
-            <div key={i} className="group flex justify-between items-center p-6 bg-zinc-900/50 rounded-2xl border border-transparent hover:border-orange-600/30 transition-all">
-              <div className="flex items-center gap-6">
-                <span className="text-zinc-600 font-black text-xl">#{String(i + 1).padStart(2, '0')}</span>
-                <div className="h-8 w-1 bg-orange-600 rounded-full group-hover:scale-y-125 transition-transform"></div>
-                <span className="text-zinc-400 uppercase font-bold tracking-widest text-sm">Checkpoint Passed</span>
+          <div className="flex justify-between items-end mb-8 border-b-2 border-zinc-800 pb-4">
+            <h3 className="text-orange-500 font-black text-2xl uppercase tracking-tighter">Splits</h3>
+            <span className="text-zinc-600 text-xs font-bold tracking-[0.5em] uppercase">{roomState?.splits.length || 0} Records Found</span>
+          </div>
+          <div className="space-y-4 max-h-[400px] overflow-y-auto pr-4">
+            {roomState?.splits.map((time, i) => (
+              <div key={i} className="group flex justify-between items-center p-6 bg-zinc-900/50 rounded-2xl border border-transparent hover:border-orange-600/30 transition-all">
+                <div className="flex items-center gap-6">
+                  <span className="text-zinc-600 font-black text-xl">#{String(i + 1).padStart(2, '0')}</span>
+                  <div className="h-8 w-1 bg-orange-600 rounded-full group-hover:scale-y-125 transition-transform"></div>
+                  <span className="text-zinc-400 uppercase font-bold tracking-widest text-sm">Checkpoint Passed</span>
+                </div>
+                <span className="text-4xl font-black text-white group-hover:text-orange-500 transition-colors">{formatTime(time)}</span>
               </div>
-              <span className="text-4xl font-black text-white group-hover:text-orange-500 transition-colors">{formatTime(time)}</span>
-            </div>
-          )).reverse()}
-        </div>
+            )).reverse()}
+          </div>
         </div>
       )}
     </div>
-  );
+  )
 }
-export default App;
